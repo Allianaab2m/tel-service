@@ -22,7 +22,21 @@ const DigitWords: Readonly<Record<string, string>> = {
   "*": "こめじるし", "#": "シャープ",
 }
 
-export class SyncError extends Data.TaggedError("SyncError")<{ readonly exitCode: number }> { }
+/**
+ * 番号を1桁ずつの読みにする。
+ * 「6615050番」のまま TTS に渡すと桁読み（ろっぴゃくろくじゅういちまん…）になってしまう
+ */
+export const spellDigits = (digits: string) =>
+  [...digits].map((d) => DigitWords[d] ?? d).join("、")
+
+export class SyncError extends Data.TaggedError("SyncError")<{
+  readonly command: string
+  readonly exitCode: number
+}> {
+  override get message() {
+    return `${this.command} exited with ${this.exitCode}`
+  }
+}
 
 /**
  * 文言 → 音声ファイルの対応を管理する。
@@ -48,14 +62,31 @@ export class Voice extends Effect.Service<Voice>()("Voice", {
       onNone: () => Effect.void,
       onSome: (target) =>
         Command.make("rsync", "-a", `${cfg.localSoundsDir.replace(/\/$/, "")}/`, target).pipe(
+          // rsync の失敗理由はそのまま stderr に出させる
+          Command.stderr("inherit"),
           Command.exitCode,
           Effect.flatMap((code) =>
-            code === 0 ? Effect.void : Effect.fail(new SyncError({ exitCode: code })),
+            code === 0
+              ? Effect.void
+              : Effect.fail(new SyncError({ command: `rsync -a ... ${target}`, exitCode: code })),
           ),
         ),
     })
 
-    /** まだ無い文言だけ合成し、PBX に同期する */
+    /**
+     * PBX が同じ場所を直接読む構成でも書きかけを掴ませないよう、
+     * 一時ファイルに書いてから rename する（同一ディレクトリなので原子的）
+     */
+    const write = (text: string, wav: Uint8Array) => {
+      const dest = localFile(text)
+      const tmp = `${dest}.tmp`
+      return fs.writeFile(tmp, wav).pipe(
+        Effect.flatMap(() => fs.rename(tmp, dest)),
+        Effect.onError(() => Effect.ignore(fs.remove(tmp))),
+      )
+    }
+
+    /** まだ無い文言だけ合成し、必要なら PBX に同期する */
     const prepare = (texts: Iterable<string>) =>
       Effect.gen(function* () {
         yield* fs.makeDirectory(cfg.localSoundsDir, { recursive: true })
@@ -68,7 +99,7 @@ export class Voice extends Effect.Service<Voice>()("Voice", {
           missing,
           (t) =>
             tts.synth(t).pipe(
-              Effect.flatMap((wav) => fs.writeFile(localFile(t), wav)),
+              Effect.flatMap((wav) => write(t, wav)),
               Effect.catchAllCause((c) => Effect.logWarning(`TTS failed: ${t}`, c)),
             ),
           { concurrency: 2, discard: true },

@@ -30,7 +30,7 @@ bun run crawl.ts > index.json
 | `openjtalk` | `open_jtalk` + `sox` をローカルで実行する。軽いので Raspberry Pi 向け |
 | `voicevox`  | VOICEVOX エンジンの HTTP API を叩く |
 
-どちらも 8kHz / モノラル / 16bit の wav を `LOCAL_SOUNDS_DIR` に書き、`SYNC_TARGET` があれば rsync で PBX に送る。
+どちらも 8kHz / モノラル / 16bit の wav を `LOCAL_SOUNDS_DIR` に書く。
 
 ファイル名は `<エンジン識別子>:<文言>` のハッシュなので、`TTS_ENGINE` や声を変えると全音声が作り直される。
 
@@ -56,6 +56,42 @@ sudo apt install open-jtalk open-jtalk-mecab-naist-jdic hts-voice-nitech-jp-atr5
 VOICEVOX_URL=http://localhost:50021
 VOICEVOX_SPEAKER=3
 ```
+
+## 音声ファイルの受け渡し
+
+`LOCAL_SOUNDS_DIR` は wav を書き出す場所、`PBX_SOUNDS_DIR` は Asterisk から見た同じ場所の絶対パス。
+
+AGI サーバーと MikoPBX が同じ機械なら、`/storage` のバインドマウント先に直接書けば同期は要らない。
+
+```bash
+docker inspect mikopbx --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+mkdir -p /var/spool/mikopbx/storage/usbdisk1/mikopbx/media/custom/bango
+```
+
+```
+LOCAL_SOUNDS_DIR=/var/spool/mikopbx/storage/usbdisk1/mikopbx/media/custom/bango
+PBX_SOUNDS_DIR=/storage/usbdisk1/mikopbx/media/custom/bango
+```
+
+書き込みは一時ファイル + rename なので、生成中に着信しても書きかけの wav を再生することはない。
+
+PBX が別の機械のときだけ `SYNC_TARGET` に rsync の転送先を設定する。転送先のディレクトリは先に作っておくこと。
+
+## ダイヤルプラン
+
+MikoPBX の「システム」→「システムファイルのカスタマイズ」→ `extensions.conf`、モードは「ファイルの末尾に追加」で次を足す。既存の記述は消さないこと。
+
+```
+[applications]
+exten => 104,1,NoOp(--- bango ---)
+ same => n,Answer()
+ same => n,AGI(agi://<AGI サーバーの IP>:4573/bango)
+ same => n,ExecIf($["${BANGO_TARGET}x" == "x"]?Hangup())
+ same => n,Goto(all_peers,${BANGO_TARGET},1)
+ same => n,Hangup()
+```
+
+`Goto` 先は `all_peers`。自局の内線（`internal`）、0 始まりの番号や各種アプリ（`applications`）、他局への発信（`outgoing`）の3つを順に試すのがこのコンテキストだけなので、`outgoing` に直接飛ばすと自局の内線が引けない。
 
 ## 設定
 

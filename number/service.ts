@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { Agi } from "./agi"
-import { Directory, extensionText, stationText } from "./directory"
+import { Directory, extensionText, stationTarget, stationText } from "./directory"
 import { Prompts, Voice } from "./voice"
 
 /** 番号案内の IVR 本体 */
@@ -14,7 +14,8 @@ export const bango = Effect.gen(function* () {
   yield* Effect.sleep("500 millis") // 応答直後の頭切れ対策
   yield* play(Prompts.intro)
 
-  const input = yield* agi.getData(voice.say(Prompts.enter), "10 seconds", 16)
+  // タイムアウトにはプロンプトの再生時間も含まれるので、読み上げ分を上乗せしておく
+  const input = yield* agi.getData(voice.say(Prompts.enter), "20 seconds", 16)
   if (input === "") {
     yield* play(Prompts.noInput)
     return yield* agi.hangup
@@ -32,11 +33,20 @@ export const bango = Effect.gen(function* () {
     }
     case "Station": {
       yield* play(stationText(hit.station))
+      const target = stationTarget(hit.station)
+      // 案内できる番号が1つも無い局は、つなぎ先が無いので選択肢を出さない
+      if (target) {
+        const choice = yield* agi.getData(voice.say(Prompts.connect), "10 seconds", 1)
+        if (choice === "1") {
+          yield* play(Prompts.connecting)
+          return yield* agi.setVariable("BANGO_TARGET", target)
+        }
+      }
       break
     }
     case "Extension": {
       yield* play(extensionText(hit.extension))
-      const choice = yield* agi.getData(voice.say(Prompts.connect), "5 seconds", 1)
+      const choice = yield* agi.getData(voice.say(Prompts.connect), "10 seconds", 1)
       if (choice === "1") {
         yield* play(Prompts.connecting)
         // AGI を抜けた後、ダイヤルプラン側がこの番号へ発信する

@@ -2,7 +2,7 @@ import { Data, Effect, Ref } from "effect"
 import { HttpClient } from "@effect/platform"
 import { AppConfig } from "./config"
 import { crawl, emptyIndex, type Extension, type Index, type Station } from "./mantela.js"
-import { Voice } from "./voice"
+import { spellDigits, Voice } from "./voice"
 
 export type Hit = Data.TaggedEnum<{
   Station: { readonly station: Station }
@@ -11,8 +11,15 @@ export type Hit = Data.TaggedEnum<{
 }>
 export const Hit = Data.taggedEnum<Hit>()
 
-export const stationText = (s: Station) =>
-  `${s.name}です。内線は、${s.extCount}件、登録されています。`
+export const stationText = (s: Station) => {
+  const head = `${s.name}です。内線は、${s.extCount}件、登録されています。`
+  if (s.main) return `${head}代表番号は、${spellDigits(s.main)}番です。`
+  // 代表番号が無い局は、実際にかけられる番号をいくつか読み上げる
+  return head + s.samples.map((e) => `${spellDigits(e.dial)}番、${e.name}。`).join("")
+}
+
+/** 局を案内したあと、1 を押されたときの接続先 */
+export const stationTarget = (s: Station) => s.main ?? s.samples[0]?.dial
 export const extensionText = (e: Extension) => `${e.station}の、${e.name}です。`
 
 const announcements = (idx: Index) => [

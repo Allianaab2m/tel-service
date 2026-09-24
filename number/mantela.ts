@@ -5,6 +5,8 @@ import { HttpClient, HttpClientResponse } from "@effect/platform"
 const MantelaExtension = Schema.Struct({
   name: Schema.String,
   extension: Schema.String,
+  /** "main" が代表番号。それ以外は案内の取捨に使う */
+  type: Schema.optional(Schema.String),
 })
 const MantelaProvider = Schema.Struct({
   name: Schema.String,
@@ -29,6 +31,10 @@ export interface Station {
   /** 自局からのダイヤル番号（経路上の prefix を連結したもの） */
   readonly dial: string
   readonly extCount: number
+  /** 代表番号（type: "main"）へのダイヤル番号。無い局のほうが多い */
+  readonly main?: string
+  /** 代表番号が無いときに案内する先頭数件 */
+  readonly samples: ReadonlyArray<{ readonly dial: string; readonly name: string }>
 }
 export interface Extension {
   readonly station: string
@@ -46,6 +52,9 @@ export const emptyIndex: Index = {
   extensions: new Map(),
   crawledAt: new Date(0),
 }
+
+/** 代表番号が無い局で読み上げる内線の件数 */
+const SampleCount = 3
 
 interface Target {
   readonly url: string
@@ -86,7 +95,21 @@ export const crawl = (client: HttpClient.HttpClient, root: string, maxDepth: num
 
         const exts = Arr.filterMap(m.extensions, (u) => decodeExtension(u))
         if (prefix !== "" && !stations.has(prefix)) {
-          stations.set(prefix, { name: m.aboutMe.name, dial: prefix, extCount: exts.length })
+          const main = exts.find((e) => e.type === "main")
+          // 代表番号が無い局のほうが多いので、その場合は先頭数件を案内に回す
+          const samples = main
+            ? []
+            : exts
+              .filter((e) => e.type !== "unused" && e.type !== "reserved")
+              .slice(0, SampleCount)
+              .map((e) => ({ dial: prefix + e.extension, name: e.name }))
+          stations.set(prefix, {
+            name: m.aboutMe.name,
+            dial: prefix,
+            extCount: exts.length,
+            ...(main ? { main: prefix + main.extension } : {}),
+            samples,
+          })
         }
         for (const e of exts) {
           const dial = prefix + e.extension
